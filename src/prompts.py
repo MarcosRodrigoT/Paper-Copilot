@@ -56,10 +56,15 @@ Paper text:
 
 METHODOLOGY_DETAILS_PROMPT = """\
 Write a detailed walkthrough of the method described below. Include:
-- Key formulations and mathematical expressions (use LaTeX like $x^2$)
+- Key formulations and mathematical expressions
 - Loss functions if any
 - Architectural choices and design decisions
 - Algorithms or training procedures
+
+IMPORTANT formatting rules for math:
+- Use $...$ for inline math (e.g., $x^2$, $d_{{model}} = 512$)
+- Use $$...$$ for display/block equations (e.g., $$L = -\\sum \\log p(y)$$)
+- Do NOT use \\( \\) or \\[ \\] delimiters — only $ and $$
 
 Be concise but do NOT leave out important details. Only skip truly minor \
 implementation specifics. This is the most important section.

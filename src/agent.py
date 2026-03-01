@@ -93,11 +93,27 @@ def _get_relevant_text(sections: list[dict], section_type: str) -> str:
     return "\n\n".join(fallback)
 
 
+def _clean_llm_output(text: str) -> str:
+    """Clean LLM output: strip thinking tags and normalize LaTeX delimiters."""
+    import re
+
+    # Remove <think>...</think> blocks (Qwen3 thinking mode)
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+
+    # Convert \[...\] to $$...$$ (display math)
+    text = re.sub(r"\\\[(.+?)\\\]", r"$$\1$$", text, flags=re.DOTALL)
+
+    # Convert \(...\) to $...$ (inline math)
+    text = re.sub(r"\\\((.+?)\\\)", r"$\1$", text, flags=re.DOTALL)
+
+    return text
+
+
 def _llm_call(llm: ChatOllama, prompt: str, label: str) -> str:
     """Make an LLM call with logging."""
     print(f"      Calling LLM for: {label}...")
     response = llm.invoke(prompt)
-    content = response.content.strip()
+    content = _clean_llm_output(response.content)
     print(f"      Got {len(content)} chars")
     return content
 
