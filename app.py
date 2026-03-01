@@ -10,10 +10,41 @@ Run with: uv run streamlit run app.py
 import re
 from pathlib import Path
 
+import requests
 import streamlit as st
 
 from src.agent import process_paper
-from src.config import INPUT_DIR, OLLAMA_MODEL, OUTPUT_DIR
+from src.config import INPUT_DIR, OLLAMA_BASE_URL, OLLAMA_MODEL, OUTPUT_DIR
+
+
+@st.cache_data(ttl=30)
+def _get_tool_capable_models() -> list[str]:
+    """Query Ollama for locally installed models that support tool calling."""
+    try:
+        resp = requests.get(f"{OLLAMA_BASE_URL}/api/tags", timeout=5)
+        resp.raise_for_status()
+        models = resp.json().get("models", [])
+    except Exception:
+        return [OLLAMA_MODEL]
+
+    capable = []
+    for m in models:
+        name = m["name"]
+        try:
+            detail = requests.post(
+                f"{OLLAMA_BASE_URL}/api/show",
+                json={"name": name},
+                timeout=5,
+            )
+            template = detail.json().get("template", "")
+            if ".Tools" in template or "tool" in template.lower():
+                capable.append(name)
+        except Exception:
+            continue
+
+    # Deduplicate names that differ only by tag alias (e.g. gpt-oss:latest / gpt-oss:20b)
+    # Keep the shorter name if the ID is the same
+    return capable if capable else [OLLAMA_MODEL]
 
 st.set_page_config(
     page_title="Research Paper Copilot",
@@ -30,10 +61,18 @@ st.markdown(
 # --- Sidebar: settings ---
 with st.sidebar:
     st.header("Settings")
-    model_name = st.text_input(
+
+    available_models = _get_tool_capable_models()
+    # Put the configured default first
+    if OLLAMA_MODEL in available_models:
+        available_models.remove(OLLAMA_MODEL)
+        available_models.insert(0, OLLAMA_MODEL)
+
+    model_name = st.selectbox(
         "Ollama model",
-        value=OLLAMA_MODEL,
-        help="Any Ollama model that supports tool calling.",
+        options=available_models,
+        index=0,
+        help="Only locally installed models with tool-calling support are shown.",
     )
     st.divider()
     st.markdown(
