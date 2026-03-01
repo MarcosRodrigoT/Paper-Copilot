@@ -199,8 +199,15 @@ def process_paper(pdf_path: str, model_name: str | None = None) -> str:
     # ── Step 4: LLM generates summaries (one section at a time) ──
     print("[4/6] Generating summaries section by section...")
 
-    # 4a: Metadata
-    meta_text = _get_relevant_text(sections, "metadata")
+    # 4a: Metadata — always include the first section (title + authors live there)
+    meta_parts = []
+    if sections:
+        first = sections[0]
+        meta_parts.append(f"## {first['heading']}\n{first['content']}")
+    meta_extra = _get_relevant_text(sections, "metadata")
+    if meta_extra and meta_extra not in meta_parts:
+        meta_parts.append(meta_extra)
+    meta_text = "\n\n".join(meta_parts)
     meta_raw = _llm_call(llm, METADATA_PROMPT.format(text=meta_text), "metadata")
     metadata = _parse_metadata(meta_raw)
 

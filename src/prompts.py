@@ -7,15 +7,25 @@ the context manageable for local models.
 """
 
 METADATA_PROMPT = """\
-Extract the following metadata from this paper text. Answer with ONLY \
-the requested information, nothing else.
+Extract the following metadata from this paper text. Answer with EXACTLY \
+the four lines shown below, nothing else. The title is usually the first \
+heading or the largest text at the top. The authors are listed right after \
+the title.
+
+Example output:
+Title: Generative Adversarial Nets
+Authors: Ian J. Goodfellow, Jean Pouget-Abadie, Mehdi Mirza, Bing Xu, David Warde-Farley, Sherjil Ozair, Aaron Courville, Yoshua Bengio
+Published: 2014 (NIPS 2014)
+DOI: none
+
+Now extract from this paper:
 
 Title:
 Authors:
 Published (year and venue):
 DOI or link (if found, otherwise write "none"):
 
-Paper text (first section):
+Paper text:
 {text}
 """
 
