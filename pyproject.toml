@@ -1,0 +1,13 @@
+[project]
+name = "paper-copilot"
+version = "0.1.0"
+description = "A LangChain agent that summarizes research papers into Notion-ready markdown"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "langchain>=0.3",
+    "langchain-ollama>=0.3",
+    "pymupdf>=1.25",
+    "matplotlib>=3.10",
+    "streamlit>=1.42",
+]
