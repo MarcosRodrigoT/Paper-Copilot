@@ -7,7 +7,7 @@ the generated markdown summaries.
 Run with: uv run streamlit run app.py
 """
 
-import shutil
+import re
 from pathlib import Path
 
 import streamlit as st
@@ -104,35 +104,40 @@ if uploaded_file is not None:
         st.divider()
         st.header("Generated Summary")
 
-        # Read and display the markdown
         md_content = summary_path.read_text(encoding="utf-8")
-
-        # Replace relative image paths with absolute paths for Streamlit display
         images_dir = paper_output_dir / "images"
-        if images_dir.exists():
-            for img_file in images_dir.iterdir():
-                relative = f"images/{img_file.name}"
-                if relative in md_content:
-                    md_content = md_content.replace(
-                        f"![]({relative})",
-                        "",
-                    )
-                    md_content = md_content.replace(
-                        relative,
-                        str(img_file),
-                    )
 
-        st.markdown(md_content, unsafe_allow_html=True)
+        # Split markdown at image tags and render each chunk properly.
+        # Streamlit can't display local images via markdown ![](path),
+        # so we render text chunks with st.markdown and images with st.image.
+        image_pattern = re.compile(
+            r"!\[([^\]]*)\]\(images/([^)]+)\)\n?"
+            r"(?:\*([^*]+)\*\n?)?",  # optional italic caption line
+        )
 
-        # Display images that couldn't be inlined
-        if images_dir.exists():
-            image_files = sorted(images_dir.glob("*.png")) + sorted(
-                images_dir.glob("*.jpg")
-            )
-            if image_files:
-                st.subheader("Figures")
-                for img_path in image_files:
-                    st.image(str(img_path), caption=img_path.stem)
+        last_end = 0
+        for match in image_pattern.finditer(md_content):
+            # Render the text before this image
+            text_before = md_content[last_end:match.start()].strip()
+            if text_before:
+                st.markdown(text_before)
+
+            # Render the image
+            alt_text = match.group(1)
+            img_filename = match.group(2)
+            italic_caption = match.group(3)
+            img_path = images_dir / img_filename
+
+            caption = italic_caption or alt_text or ""
+            if img_path.exists():
+                st.image(str(img_path), caption=caption if caption else None)
+
+            last_end = match.end()
+
+        # Render any remaining text after the last image
+        remaining = md_content[last_end:].strip()
+        if remaining:
+            st.markdown(remaining)
 
         # Download buttons
         st.divider()
@@ -174,7 +179,7 @@ else:
         ### Getting started
 
         1. Make sure Ollama is running: `ollama serve`
-        2. Pull a model: `ollama pull mistral-small`
+        2. Pull a model: `ollama pull qwen3:32b`
         3. Upload a PDF above
 
         You can also process papers from the command line:
