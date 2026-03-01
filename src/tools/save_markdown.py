@@ -61,36 +61,37 @@ def _build_markdown(
     lines.append("---")
     lines.append("")
 
-    # Helper to insert figures for a given section
-    def insert_figures(section_name: str):
-        section_figs = [f for f in figures if f.get("section", "").lower() == section_name.lower()]
-        for fig in section_figs:
-            lines.append("")
-            caption = fig.get("caption", "")
-            lines.append(f"![{caption}](images/{fig['filename']})")
-            if caption:
-                lines.append(f"*{caption}*")
-            lines.append("")
+    # Helper to insert figures for a given section (fuzzy matching)
+    def insert_figures(section_keywords: list[str]):
+        for fig in figures:
+            fig_section = fig.get("section", "").lower()
+            if any(kw in fig_section for kw in section_keywords):
+                lines.append("")
+                caption = fig.get("caption", "")
+                lines.append(f"![{caption}](images/{fig['filename']})")
+                if caption:
+                    lines.append(f"*{caption}*")
+                lines.append("")
 
     # Overview
     lines.append("## Overview")
     lines.append("")
     lines.append(overview)
-    insert_figures("overview")
+    insert_figures(["overview"])
     lines.append("")
 
     # Contribution
     lines.append("## Contribution")
     lines.append("")
     lines.append(contribution)
-    insert_figures("contribution")
+    insert_figures(["contribution"])
     lines.append("")
 
     # State of the Art
     lines.append("## State of the Art")
     lines.append("")
     lines.append(state_of_the_art)
-    insert_figures("state of the art")
+    insert_figures(["state of the art", "related", "background"])
     lines.append("")
 
     # Methodology
@@ -101,21 +102,21 @@ def _build_markdown(
     lines.append("### Method Details")
     lines.append("")
     lines.append(methodology_details)
-    insert_figures("methodology")
+    insert_figures(["method", "architecture", "model", "approach", "framework"])
     lines.append("")
 
     # Evaluation
     lines.append("## Evaluation")
     lines.append("")
     lines.append(evaluation)
-    insert_figures("evaluation")
+    insert_figures(["eval", "experiment", "setup"])
     lines.append("")
 
     # Key Results
     lines.append("## Key Results")
     lines.append("")
     lines.append(key_results)
-    insert_figures("key results")
+    insert_figures(["result", "performance", "comparison", "ablat"])
     lines.append("")
 
     # References Analysis

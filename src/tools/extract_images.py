@@ -22,39 +22,50 @@ def _find_caption(page: fitz.Page, image_rect: fitz.Rect) -> str:
     Look for a caption below or above an image on the page.
 
     Strategy: search for text starting with "Fig", "Figure", or "Table"
-    in the area immediately below (or above) the image bounding box.
+    in an area below (or above) the image. We use the full page width
+    because captions in two-column papers often span wider than the image.
     """
     page_rect = page.rect
+    caption_pattern = re.compile(
+        r"((?:Fig(?:ure)?|Table|Alg(?:orithm)?)\s*\.?\s*\d+[.:]\s*.+)",
+        re.IGNORECASE,
+    )
 
-    # Search below the image first (most common caption placement)
+    # Search below the image (most common caption placement)
     below_rect = fitz.Rect(
-        image_rect.x0,
+        page_rect.x0,
         image_rect.y1,
-        image_rect.x1,
-        min(image_rect.y1 + 80, page_rect.y1),
+        page_rect.x1,
+        min(image_rect.y1 + 120, page_rect.y1),
     )
     text_below = page.get_text("text", clip=below_rect).strip()
 
-    # Check if it looks like a caption
-    caption_pattern = re.compile(
-        r"^(Fig\.?|Figure|Table|Alg\.?|Algorithm)\s*\d*", re.IGNORECASE
-    )
-    if text_below and caption_pattern.match(text_below):
-        # Take just the first few lines (captions are usually 1-3 lines)
-        lines = text_below.split("\n")
-        return " ".join(lines[:4]).strip()
+    match = caption_pattern.search(text_below)
+    if match:
+        # Extract just the caption sentence (up to first period after 20+ chars)
+        caption = match.group(1)
+        # Clean up: take text up to the second sentence-ending period
+        period_idx = caption.find(".", 15)
+        if period_idx != -1 and period_idx < 300:
+            caption = caption[: period_idx + 1]
+        return caption.strip()
 
     # Try above the image
     above_rect = fitz.Rect(
-        image_rect.x0,
-        max(image_rect.y0 - 80, 0),
-        image_rect.x1,
+        page_rect.x0,
+        max(image_rect.y0 - 120, 0),
+        page_rect.x1,
         image_rect.y0,
     )
     text_above = page.get_text("text", clip=above_rect).strip()
-    if text_above and caption_pattern.match(text_above):
-        lines = text_above.split("\n")
-        return " ".join(lines[:4]).strip()
+
+    match = caption_pattern.search(text_above)
+    if match:
+        caption = match.group(1)
+        period_idx = caption.find(".", 15)
+        if period_idx != -1 and period_idx < 300:
+            caption = caption[: period_idx + 1]
+        return caption.strip()
 
     return ""
 
