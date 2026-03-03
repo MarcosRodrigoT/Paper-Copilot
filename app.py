@@ -70,21 +70,66 @@ def _get_processed_papers() -> list[dict]:
     return papers
 
 
-def _render_summary(summary_path: Path, images_dir: Path):
-    """Render a markdown summary with inline images."""
-    md_content = summary_path.read_text(encoding="utf-8")
+# Known top-level sections in the order they appear in the summary.
+_SECTION_HEADINGS = [
+    "Overview",
+    "Contribution",
+    "State of the Art",
+    "Methodology",
+    "Evaluation",
+    "Key Results",
+    "References Analysis",
+]
 
-    # Split markdown at image tags and render each chunk properly.
-    # Streamlit can't display local images via markdown ![](path),
-    # so we render text chunks with st.markdown and images with st.image.
-    image_pattern = re.compile(
-        r"!\[(.*?)\]\(images/([^)]+)\)\n?"
-        r"(?:\*([^*]+)\*\n?)?",  # optional italic caption line
+# Tab labels with icons for each section.
+_SECTION_TAB_LABELS = [
+    "🔎 Overview",
+    "💡 Contribution",
+    "📊 State of the Art",
+    "⚙️ Methodology",
+    "🧪 Evaluation",
+    "📈 Key Results",
+    "📚 References",
+]
+
+# Regex for image tags: ![alt](images/file.png) with optional italic caption.
+_IMAGE_RE = re.compile(
+    r"!\[(.*?)\]\(images/([^)]+)\)\n?"
+    r"(?:\*([^*]+)\*\n?)?",
+)
+
+
+def _split_sections(md_content: str) -> tuple[str, dict[str, str]]:
+    """Split a summary markdown into a header and a dict of section contents.
+
+    Returns (header, {section_name: body}).
+    """
+    # Build a pattern that matches any of our known section headings as H2.
+    heading_pattern = re.compile(
+        r"^## (" + "|".join(re.escape(h) for h in _SECTION_HEADINGS) + r")\s*$",
+        re.MULTILINE,
     )
 
+    matches = list(heading_pattern.finditer(md_content))
+    if not matches:
+        return md_content, {}
+
+    header = md_content[: matches[0].start()].strip()
+    sections: dict[str, str] = {}
+    for i, m in enumerate(matches):
+        name = m.group(1)
+        start = m.end()
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(md_content)
+        sections[name] = md_content[start:end].strip()
+
+    return header, sections
+
+
+def _render_markdown_chunk(text: str, images_dir: Path):
+    """Render a markdown chunk, replacing image tags with centered st.image."""
     last_end = 0
-    for match in image_pattern.finditer(md_content):
-        text_before = md_content[last_end:match.start()].strip()
+    for match in _IMAGE_RE.finditer(text):
+        text_before = text[last_end : match.start()].strip()
         if text_before:
             st.markdown(text_before)
 
@@ -95,13 +140,43 @@ def _render_summary(summary_path: Path, images_dir: Path):
 
         caption = italic_caption or alt_text or ""
         if img_path.exists():
-            st.image(str(img_path), caption=caption if caption else None)
+            _, col_img, _ = st.columns([1, 3, 1])
+            with col_img:
+                st.image(str(img_path), caption=caption if caption else None)
 
         last_end = match.end()
 
-    remaining = md_content[last_end:].strip()
+    remaining = text[last_end:].strip()
     if remaining:
         st.markdown(remaining)
+
+
+def _render_summary(summary_path: Path, images_dir: Path):
+    """Render a markdown summary with section tabs and centered images."""
+    md_content = summary_path.read_text(encoding="utf-8")
+    header, sections = _split_sections(md_content)
+
+    # Render the header (title, authors, metadata).
+    if header:
+        st.markdown(header)
+
+    if not sections:
+        # Fallback: render everything as one block.
+        _render_markdown_chunk(md_content, images_dir)
+        return
+
+    # Build tabs only for sections that exist in this summary.
+    tab_names = []
+    tab_labels = []
+    for name, label in zip(_SECTION_HEADINGS, _SECTION_TAB_LABELS):
+        if name in sections:
+            tab_names.append(name)
+            tab_labels.append(label)
+
+    tabs = st.tabs(tab_labels)
+    for tab, name in zip(tabs, tab_names):
+        with tab:
+            _render_markdown_chunk(sections[name], images_dir)
 
 
 def _render_download_buttons(paper_name: str, summary_path: Path, images_dir: Path):
@@ -192,6 +267,20 @@ with st.sidebar:
         "4. 📋 You get a markdown file ready for Notion"
     )
 
+
+# ── Styling ──────────────────────────────────────────────────
+# Center display-mode LaTeX formulas ($$...$$) rendered by Streamlit/KaTeX.
+st.markdown(
+    """
+    <style>
+    /* Center display-mode KaTeX blocks */
+    .katex-display {
+        text-align: center;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
 # ── Main content ─────────────────────────────────────────────
 st.title("📄 Research Paper Copilot")
