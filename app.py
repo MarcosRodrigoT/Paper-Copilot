@@ -9,13 +9,14 @@ Run with: uv run streamlit run app.py
 
 import io
 import re
+import subprocess
+import sys
 import zipfile
 from pathlib import Path
 
 import requests
 import streamlit as st
 
-from src.agent import process_paper
 from src.config import INPUT_DIR, OLLAMA_BASE_URL, OLLAMA_MODEL, OUTPUT_DIR
 
 
@@ -332,39 +333,49 @@ elif uploaded_file is not None:
 
     if run_agent:
         progress_bar = st.progress(0, text="Starting...")
-        _last_frac = [0.0]  # mutable container for closure
+        _step_re = re.compile(r"\[(\d+)/(\d+)\]")
+        _last_frac = 0.0
 
-        def _on_progress(step: str, detail: str = ""):
-            """Update the progress bar based on pipeline step markers."""
-            import re as _re
-
-            match = _re.match(r"\[(\d+)/(\d+)\]", step)
-            if match:
-                current = int(match.group(1))
-                total = int(match.group(2))
-                label = step.split("]", 1)[-1].strip()
-                if detail:
-                    label = f"{label} {detail}".strip() if label else detail
-                frac = current / total
-                _last_frac[0] = frac
-                progress_bar.progress(frac, text=label)
-            elif detail:
-                progress_bar.progress(_last_frac[0], text=detail)
+        # Run the agent in a subprocess so all GPU memory is freed on exit.
+        cmd = [sys.executable, "-u", "-m", "src.agent", str(input_path)]
+        if model_name and model_name != OLLAMA_MODEL:
+            cmd.append(model_name)
 
         try:
-            result_path = process_paper(
-                str(input_path),
-                model_name=model_name if model_name != OLLAMA_MODEL else None,
-                on_progress=_on_progress,
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
             )
+            for line in proc.stdout:
+                line = line.rstrip()
+                if not line:
+                    continue
+                # Skip library log lines (e.g. [INFO], [DEBUG], WARNING:)
+                stripped = re.sub(r"\x1b\[[0-9;]*m", "", line)  # strip ANSI codes
+                if re.match(r"\[?(INFO|DEBUG|WARNING|ERROR)\]?", stripped):
+                    continue
+                match = _step_re.match(line)
+                if match:
+                    current = int(match.group(1))
+                    total = int(match.group(2))
+                    label = line.split("]", 1)[-1].strip()
+                    _last_frac = current / total
+                    progress_bar.progress(_last_frac, text=label)
+                else:
+                    # Sub-step detail — update label, keep bar position.
+                    progress_bar.progress(_last_frac, text=line)
 
-            if result_path and Path(result_path).exists():
+            proc.wait()
+
+            if proc.returncode == 0 and summary_path.exists():
                 progress_bar.progress(1.0, text="✅ Done!")
             else:
                 st.warning("Agent finished but no summary was created.")
         except Exception as e:
             st.error(f"An error occurred: {e}")
-            result_path = ""
 
     # Display results for the uploaded paper
     if summary_path.exists():

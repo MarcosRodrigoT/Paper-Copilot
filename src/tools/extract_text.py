@@ -8,10 +8,6 @@ Uses Docling to parse the document structure and detect section headings.
 import json
 import re
 
-from docling.datamodel.base_models import InputFormat
-from docling.datamodel.pipeline_options import PdfPipelineOptions
-from docling.document_converter import DocumentConverter, PdfFormatOption
-from docling_core.types.doc import TextItem
 from langchain_core.tools import tool
 
 # Pattern for numbered section headings (e.g. "1. Introduction", "I. INTRODUCTION", "2 Methods")
@@ -41,6 +37,8 @@ def _extract_sections(conv_result) -> list[dict]:
 
     Returns a list of dicts: [{"heading": "...", "content": "...", "page": N}, ...]
     """
+    from docling_core.types.doc import TextItem
+
     doc = conv_result.document
 
     sections = []
@@ -110,6 +108,10 @@ def _extract_sections(conv_result) -> list[dict]:
 
 def _convert_pdf_for_text(pdf_path: str):
     """Standalone Docling conversion for the @tool entry point."""
+    from docling.datamodel.base_models import InputFormat
+    from docling.datamodel.pipeline_options import PdfPipelineOptions
+    from docling.document_converter import DocumentConverter, PdfFormatOption
+
     converter = DocumentConverter(
         format_options={
             InputFormat.PDF: PdfFormatOption(pipeline_options=PdfPipelineOptions())

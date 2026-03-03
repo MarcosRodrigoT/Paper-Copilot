@@ -9,10 +9,6 @@ import json
 import re
 from pathlib import Path
 
-from docling.datamodel.base_models import InputFormat
-from docling.datamodel.pipeline_options import PdfPipelineOptions
-from docling.document_converter import DocumentConverter, PdfFormatOption
-from docling_core.types.doc import PictureItem, TextItem
 from langchain_core.tools import tool
 
 # Minimum dimensions (pixels) to filter out tiny decorative images and headshots
@@ -32,6 +28,8 @@ def _build_caption_map(doc) -> dict[int, list[str]]:
     Scans all TextItems whose label contains 'caption' or whose text
     starts with 'Figure'/'Table'. Returns {page_no: [caption_text, ...]}.
     """
+    from docling_core.types.doc import TextItem
+
     captions: dict[int, list[str]] = {}
     for item, _level in doc.iterate_items():
         if not isinstance(item, TextItem):
@@ -116,6 +114,8 @@ def _extract_images_from_pdf(
     results = []
     image_counter = 0
 
+    from docling_core.types.doc import PictureItem
+
     for element, _level in doc.iterate_items():
         if not isinstance(element, PictureItem):
             continue
@@ -165,6 +165,10 @@ def _extract_images_from_pdf(
 
 def _convert_pdf_for_images(pdf_path: str):
     """Standalone Docling conversion for the @tool entry point."""
+    from docling.datamodel.base_models import InputFormat
+    from docling.datamodel.pipeline_options import PdfPipelineOptions
+    from docling.document_converter import DocumentConverter, PdfFormatOption
+
     pipeline_options = PdfPipelineOptions()
     pipeline_options.generate_picture_images = True
     pipeline_options.images_scale = 2.0

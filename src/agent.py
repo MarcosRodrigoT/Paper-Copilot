@@ -15,16 +15,20 @@ Usage:
     python -m src.agent path/to/paper.pdf
 """
 
+import gc
 import json
+import logging
 import sys
 import tempfile
+
+# Suppress noisy INFO/DEBUG logs from Docling, RapidOCR, and friends.
+# Must be set before those libraries are imported.
+for _logger_name in ("docling", "docling_core", "rapidocr", "RapidOCR", "deepsearch_glm"):
+    logging.getLogger(_logger_name).setLevel(logging.WARNING)
 from collections import Counter
 from collections.abc import Callable
 from pathlib import Path
 
-from docling.datamodel.base_models import InputFormat
-from docling.datamodel.pipeline_options import PdfPipelineOptions
-from docling.document_converter import DocumentConverter, PdfFormatOption
 from langchain_ollama import ChatOllama
 
 from src.config import OLLAMA_BASE_URL, OLLAMA_MODEL, OUTPUT_DIR
@@ -57,6 +61,10 @@ def _convert_pdf(pdf_path: str):
     Enables picture image extraction so both text and image extractors
     can share the same result without converting twice.
     """
+    from docling.datamodel.base_models import InputFormat
+    from docling.datamodel.pipeline_options import PdfPipelineOptions
+    from docling.document_converter import DocumentConverter, PdfFormatOption
+
     pipeline_options = PdfPipelineOptions()
     pipeline_options.generate_picture_images = True
     pipeline_options.images_scale = 2.0
@@ -67,6 +75,27 @@ def _convert_pdf(pdf_path: str):
         }
     )
     return converter.convert(pdf_path)
+
+
+def _free_gpu_memory():
+    """Force-free GPU memory held by Docling's ML models.
+
+    Removes cached docling modules so their model objects become
+    unreachable, then runs garbage collection and clears the CUDA cache.
+    """
+    # Drop cached docling modules so model objects can be GC'd.
+    to_remove = [k for k in sys.modules if k.startswith(("docling", "docling_core"))]
+    for key in to_remove:
+        del sys.modules[key]
+
+    gc.collect()
+
+    try:
+        import torch
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except ImportError:
+        pass
 
 
 def _create_llm(model_name: str | None = None) -> ChatOllama:
@@ -238,6 +267,10 @@ def process_paper(
     _progress("[2/6] Extracting images...")
     images = _extract_images_from_pdf(conv_result, tmp_images)
     _progress("[2/6]", f"Found {len(images)} images")
+
+    # Free Docling models and GPU memory now that extraction is done.
+    del conv_result
+    _free_gpu_memory()
 
     # ── Step 3: Parse references & generate chart ─────────────────
     _progress("[3/6] Parsing references...")
