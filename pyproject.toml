@@ -7,7 +7,7 @@ requires-python = ">=3.12"
 dependencies = [
     "langchain>=0.3",
     "langchain-ollama>=0.3",
-    "pymupdf>=1.25",
+    "docling>=2.0",
     "matplotlib>=3.10",
     "streamlit>=1.42",
 ]

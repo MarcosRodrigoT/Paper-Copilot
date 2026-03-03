@@ -19,8 +19,12 @@ import json
 import sys
 import tempfile
 from collections import Counter
+from collections.abc import Callable
 from pathlib import Path
 
+from docling.datamodel.base_models import InputFormat
+from docling.datamodel.pipeline_options import PdfPipelineOptions
+from docling.document_converter import DocumentConverter, PdfFormatOption
 from langchain_ollama import ChatOllama
 
 from src.config import OLLAMA_BASE_URL, OLLAMA_MODEL, OUTPUT_DIR
@@ -45,6 +49,24 @@ from src.tools.parse_references import (
     _parse_reference_list,
 )
 from src.tools.save_markdown import _build_markdown, _save_output
+
+
+def _convert_pdf(pdf_path: str):
+    """Convert a PDF once using Docling, returning the conversion result.
+
+    Enables picture image extraction so both text and image extractors
+    can share the same result without converting twice.
+    """
+    pipeline_options = PdfPipelineOptions()
+    pipeline_options.generate_picture_images = True
+    pipeline_options.images_scale = 2.0
+
+    converter = DocumentConverter(
+        format_options={
+            InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options)
+        }
+    )
+    return converter.convert(pdf_path)
 
 
 def _create_llm(model_name: str | None = None) -> ChatOllama:
@@ -113,9 +135,18 @@ def _clean_llm_output(text: str) -> str:
     return text
 
 
-def _llm_call(llm: ChatOllama, prompt: str, label: str) -> str:
+def _llm_call(
+    llm: ChatOllama,
+    prompt: str,
+    label: str,
+    on_progress: Callable[[str], None] | None = None,
+) -> str:
     """Make an LLM call with logging."""
-    print(f"      Calling LLM for: {label}...")
+    msg = f"Calling LLM for: {label}..."
+    if on_progress:
+        on_progress(msg)
+    else:
+        print(f"      {msg}")
     response = llm.invoke(prompt)
     content = _clean_llm_output(response.content)
     print(f"      Got {len(content)} chars")
@@ -146,9 +177,18 @@ def _parse_metadata(text: str) -> dict:
     return result
 
 
-def process_paper(pdf_path: str, model_name: str | None = None) -> str:
+def process_paper(
+    pdf_path: str,
+    model_name: str | None = None,
+    on_progress: Callable[[str, str], None] | None = None,
+) -> str:
     """
     Process a single paper end-to-end.
+
+    Args:
+        pdf_path: Path to the PDF file.
+        model_name: Optional Ollama model name override.
+        on_progress: Optional callback(step_label, detail_message) for UI updates.
 
     Pipeline:
     1. Extract text sections from PDF (code)
@@ -158,6 +198,15 @@ def process_paper(pdf_path: str, model_name: str | None = None) -> str:
     5. LLM selects relevant figures
     6. Assemble and save markdown (code)
     """
+
+    def _progress(step: str, detail: str = ""):
+        print(f"{step} {detail}".strip())
+        if on_progress:
+            on_progress(step, detail)
+
+    def _llm_with_progress(prompt: str, label: str) -> str:
+        return _llm_call(llm, prompt, label, on_progress=lambda msg: _progress("", msg))
+
     pdf_path = str(Path(pdf_path).resolve())
     paper_name = Path(pdf_path).stem
 
@@ -173,36 +222,43 @@ def process_paper(pdf_path: str, model_name: str | None = None) -> str:
 
     llm = _create_llm(model_name)
 
-    print(f"Processing: {pdf_path}")
-    print(f"Output: {paper_output_dir}")
-    print(f"Model: {model_name or OLLAMA_MODEL}")
-    print("-" * 60)
+    _progress(f"Processing: {pdf_path}")
+    _progress(f"Model: {model_name or OLLAMA_MODEL}")
+
+    # ── Step 0: Convert PDF with Docling ─────────────────────────
+    _progress("[0/6] Converting PDF with Docling...")
+    conv_result = _convert_pdf(pdf_path)
 
     # ── Step 1: Extract text ──────────────────────────────────────
-    print("[1/6] Extracting text from PDF...")
-    sections = _extract_sections(pdf_path)
-    print(f"      Found {len(sections)} sections")
+    _progress("[1/6] Extracting text sections...")
+    sections = _extract_sections(conv_result)
+    _progress("[1/6]", f"Found {len(sections)} sections")
 
     # ── Step 2: Extract images ────────────────────────────────────
-    print("[2/6] Extracting images from PDF...")
-    images = _extract_images_from_pdf(pdf_path, tmp_images)
-    print(f"      Found {len(images)} images")
+    _progress("[2/6] Extracting images...")
+    images = _extract_images_from_pdf(conv_result, tmp_images)
+    _progress("[2/6]", f"Found {len(images)} images")
 
     # ── Step 3: Parse references & generate chart ─────────────────
-    print("[3/6] Parsing references...")
+    _progress("[3/6] Parsing references...")
     refs_text = _find_references_section(sections)
     parsed_refs = _parse_reference_list(refs_text) if refs_text else []
-    print(f"      Parsed {len(parsed_refs)} references")
+    _progress("[3/6]", f"Parsed {len(parsed_refs)} references")
 
-    # Classify unknown venues using LLM
-    unknown_count = sum(1 for r in parsed_refs if r.get("venue") == "Unknown")
-    if unknown_count > 0:
-        print(f"      {unknown_count} references with unknown venue, asking LLM...")
+    # Classify unknown/vague venues using LLM
+    from src.tools.parse_references import _is_vague_venue
+
+    needs_llm = sum(
+        1 for r in parsed_refs
+        if r.get("venue") == "Unknown" or _is_vague_venue(r.get("venue", ""))
+    )
+    if needs_llm > 0:
+        _progress("[3/6]", f"{needs_llm} references need LLM venue classification...")
         parsed_refs = _classify_unknown_venues(
-            parsed_refs, lambda p, l: _llm_call(llm, p, l)
+            parsed_refs, _llm_with_progress
         )
         remaining = sum(1 for r in parsed_refs if r.get("venue") == "Unknown")
-        print(f"      After LLM: {remaining} still unknown")
+        _progress("[3/6]", f"After LLM: {remaining} still unknown")
 
     # Normalize all venue names for consistent chart labels
     for ref in parsed_refs:
@@ -210,12 +266,12 @@ def process_paper(pdf_path: str, model_name: str | None = None) -> str:
 
     chart_generated = False
     if parsed_refs:
-        print("      Generating references chart...")
+        _progress("[3/6]", "Generating references chart...")
         _generate_pie_chart(json.dumps(parsed_refs), chart_path)
         chart_generated = Path(chart_path).exists()
 
     # ── Step 4: LLM generates summaries (one section at a time) ──
-    print("[4/6] Generating summaries section by section...")
+    _progress("[4/6] Generating summaries section by section...")
 
     # 4a: Metadata — always include the first section (title + authors live there)
     meta_parts = []
@@ -226,50 +282,52 @@ def process_paper(pdf_path: str, model_name: str | None = None) -> str:
     if meta_extra and meta_extra not in meta_parts:
         meta_parts.append(meta_extra)
     meta_text = "\n\n".join(meta_parts)
-    meta_raw = _llm_call(llm, METADATA_PROMPT.format(text=meta_text), "metadata")
+    meta_raw = _llm_with_progress(
+        METADATA_PROMPT.format(text=meta_text), "metadata"
+    )
     metadata = _parse_metadata(meta_raw)
 
     # 4b: Overview
     overview_text = _get_relevant_text(sections, "overview")
-    overview = _llm_call(llm, OVERVIEW_PROMPT.format(text=overview_text), "overview")
+    overview = _llm_with_progress(
+        OVERVIEW_PROMPT.format(text=overview_text), "overview"
+    )
 
     # 4c: Contribution
     contrib_text = _get_relevant_text(sections, "contribution")
-    contribution = _llm_call(
-        llm, CONTRIBUTION_PROMPT.format(text=contrib_text), "contribution"
+    contribution = _llm_with_progress(
+        CONTRIBUTION_PROMPT.format(text=contrib_text), "contribution"
     )
 
     # 4d: State of the Art
     sota_text = _get_relevant_text(sections, "state_of_the_art")
-    state_of_the_art = _llm_call(
-        llm, STATE_OF_ART_PROMPT.format(text=sota_text), "state of the art"
+    state_of_the_art = _llm_with_progress(
+        STATE_OF_ART_PROMPT.format(text=sota_text), "state of the art"
     )
 
     # 4e: Methodology overview
     method_text = _get_relevant_text(sections, "methodology_overview")
-    methodology_overview = _llm_call(
-        llm,
+    methodology_overview = _llm_with_progress(
         METHODOLOGY_OVERVIEW_PROMPT.format(text=method_text),
         "methodology overview",
     )
 
     # 4f: Methodology details
-    methodology_details = _llm_call(
-        llm,
+    methodology_details = _llm_with_progress(
         METHODOLOGY_DETAILS_PROMPT.format(text=method_text),
         "methodology details",
     )
 
     # 4g: Evaluation
     eval_text = _get_relevant_text(sections, "evaluation")
-    evaluation = _llm_call(
-        llm, EVALUATION_PROMPT.format(text=eval_text), "evaluation"
+    evaluation = _llm_with_progress(
+        EVALUATION_PROMPT.format(text=eval_text), "evaluation"
     )
 
     # 4h: Key results
     results_text = _get_relevant_text(sections, "key_results")
-    key_results = _llm_call(
-        llm, KEY_RESULTS_PROMPT.format(text=results_text), "key results"
+    key_results = _llm_with_progress(
+        KEY_RESULTS_PROMPT.format(text=results_text), "key results"
     )
 
     # Build references summary
@@ -285,7 +343,7 @@ def process_paper(pdf_path: str, model_name: str | None = None) -> str:
     # ── Step 5: LLM selects figures ──────────────────────────────
     selected_figures = []
     if images:
-        print("[5/6] Selecting relevant figures...")
+        _progress("[5/6] Selecting relevant figures...")
         images_description = json.dumps(images, indent=2)
         brief_summary = overview[:500] if overview else "Research paper"
         figure_message = FIGURE_SELECTION_PROMPT.format(
@@ -294,12 +352,12 @@ def process_paper(pdf_path: str, model_name: str | None = None) -> str:
         )
         fig_response = llm.invoke(figure_message)
         selected_figures = _parse_figure_selection(fig_response.content, images)
-        print(f"      Selected {len(selected_figures)} figures")
+        _progress("[5/6]", f"Selected {len(selected_figures)} figures")
     else:
-        print("[5/6] No images found, skipping figure selection.")
+        _progress("[5/6] No images found, skipping figure selection.")
 
     # ── Step 6: Assemble markdown ────────────────────────────────
-    print("[6/6] Assembling markdown...")
+    _progress("[6/6] Assembling markdown...")
     chart_filename = Path(chart_path).name if chart_generated else ""
 
     md_content = _build_markdown(
@@ -328,8 +386,7 @@ def process_paper(pdf_path: str, model_name: str | None = None) -> str:
         figure_filenames=figure_filenames,
     )
 
-    print("-" * 60)
-    print(f"Done! Summary saved to: {summary_path}")
+    _progress("Done!", f"Summary saved to: {summary_path}")
     return summary_path
 
 

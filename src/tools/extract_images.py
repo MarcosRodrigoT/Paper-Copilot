@@ -1,223 +1,179 @@
 """
 Tool: extract_images
 
-Extracts images from a PDF and matches each image to its caption
-using document-wide caption scanning with ordinal matching.
+Extracts figures from a PDF using Docling's layout analysis,
+which structurally associates images with their captions.
 """
 
 import json
 import re
 from pathlib import Path
 
-import fitz  # PyMuPDF
+from docling.datamodel.base_models import InputFormat
+from docling.datamodel.pipeline_options import PdfPipelineOptions
+from docling.document_converter import DocumentConverter, PdfFormatOption
+from docling_core.types.doc import PictureItem, TextItem
 from langchain_core.tools import tool
 
-# Minimum dimensions (pixels) to filter out tiny decorative images
-MIN_WIDTH = 100
-MIN_HEIGHT = 100
+# Minimum dimensions (pixels) to filter out tiny decorative images and headshots
+MIN_WIDTH = 200
+MIN_HEIGHT = 200
 
-# Regex to detect caption starts: Figure 1:, Fig. 2., Table 3:, Algorithm 1:
+# Pattern matching caption text (e.g. "Figure 1.", "Fig. 3:", "TABLE II.")
 _CAPTION_START = re.compile(
-    r"(Fig(?:ure)?|Table|Alg(?:orithm)?)\s*\.?\s*(\d+)\s*[.:]",
-    re.IGNORECASE,
+    r"^(fig(?:ure)?|table)\s*\.?\s*\d+", re.IGNORECASE
 )
 
-# Patterns that signal the end of a caption block
-_CAPTION_END = re.compile(
-    r"(?:Fig(?:ure)?|Table|Alg(?:orithm)?)\s*\.?\s*\d+\s*[.:]"  # next caption
-    r"|\n\s*\n",  # double newline (paragraph break)
-)
 
-# Sentence-ending period: a period followed by whitespace and an uppercase letter,
-# but NOT after common abbreviations (Fig., Sec., Eq., etc.)
-_SENTENCE_END = re.compile(
-    r"(?<!Fig)(?<!Sec)(?<!Eq)(?<!Tab)(?<!Alg)(?<!Fig)(?<!cf)(?<!etc)"
-    r"(?<!i\.e)(?<!e\.g)"
-    r"\.\s",
-)
-
-# Max caption length — most real captions are 1-3 sentences, under 250 chars
-_MAX_CAPTION_LEN = 280
-
-
-def _extract_all_captions(doc: fitz.Document) -> dict[int, str]:
+def _build_caption_map(doc) -> dict[int, list[str]]:
     """
-    Scan the entire document for figure/table captions and return them
-    keyed by their number.
+    Build a page-indexed map of caption texts found in the document.
 
-    Returns:
-        Dict mapping figure/table number to its full caption text.
-        Example: {1: "Figure 1: Overview of our architecture...", 2: "Figure 2: ..."}
+    Scans all TextItems whose label contains 'caption' or whose text
+    starts with 'Figure'/'Table'. Returns {page_no: [caption_text, ...]}.
     """
-    captions: dict[int, str] = {}
-
-    for page in doc:
-        text = page.get_text("text")
-        for match in _CAPTION_START.finditer(text):
-            fig_num = int(match.group(2))
-            if fig_num in captions:
-                continue  # keep the first occurrence
-
-            # Extract caption text starting from the match
-            start = match.start()
-            remaining = text[start:]
-
-            # Find the end of this caption: next caption label or paragraph break
-            # (skip the current match itself)
-            end_match = _CAPTION_END.search(remaining, pos=len(match.group(0)))
-            if end_match:
-                caption_text = remaining[: end_match.start()]
-            else:
-                caption_text = remaining
-
-            # Clean up: collapse whitespace, strip
-            caption_text = re.sub(r"\s+", " ", caption_text).strip()
-
-            # Cap length at a sentence boundary
-            if len(caption_text) > _MAX_CAPTION_LEN:
-                # Find the last sentence-ending period within the limit
-                best_end = 0
-                for m in _SENTENCE_END.finditer(caption_text):
-                    if m.start() > _MAX_CAPTION_LEN:
-                        break
-                    if m.start() > 30:  # skip very short matches
-                        best_end = m.start()
-                if best_end > 0:
-                    caption_text = caption_text[: best_end + 1]
-                else:
-                    caption_text = caption_text[:_MAX_CAPTION_LEN]
-
-            captions[fig_num] = caption_text
-
+    captions: dict[int, list[str]] = {}
+    for item, _level in doc.iterate_items():
+        if not isinstance(item, TextItem):
+            continue
+        text = item.text.strip()
+        if not text:
+            continue
+        label = str(item.label).lower()
+        is_caption = "caption" in label or bool(_CAPTION_START.match(text))
+        if is_caption:
+            page = item.prov[0].page_no if item.prov else 0
+            captions.setdefault(page, []).append(text)
     return captions
 
 
-def _find_caption(page: fitz.Page, image_rect: fitz.Rect) -> str:
+def _find_caption_for_image(
+    page: int,
+    image_number: int,
+    caption_map: dict[int, list[str]],
+    used_captions: set[str],
+) -> str:
     """
-    Fallback: look for a caption below or above an image on the page.
+    Find a matching caption for an image by its ordinal number and page.
 
-    Used only when document-wide ordinal matching finds no caption.
+    Looks for captions on the same page that mention the figure number
+    (e.g. "Figure 2" for image_number=2). Falls back to any unused
+    caption on the same page.
     """
-    page_rect = page.rect
+    page_captions = caption_map.get(page, [])
+    if not page_captions:
+        return ""
 
-    for search_rect in [
-        # Below the image (most common)
-        fitz.Rect(
-            page_rect.x0,
-            image_rect.y1,
-            page_rect.x1,
-            min(image_rect.y1 + 120, page_rect.y1),
-        ),
-        # Above the image
-        fitz.Rect(
-            page_rect.x0,
-            max(image_rect.y0 - 120, 0),
-            page_rect.x1,
-            image_rect.y0,
-        ),
-    ]:
-        text = page.get_text("text", clip=search_rect).strip()
-        match = _CAPTION_START.search(text)
-        if match:
-            caption = text[match.start():]
-            caption = re.sub(r"\s+", " ", caption).strip()
-            if len(caption) > _MAX_CAPTION_LEN:
-                best_end = 0
-                for m in _SENTENCE_END.finditer(caption):
-                    if m.start() > _MAX_CAPTION_LEN:
-                        break
-                    if m.start() > 30:
-                        best_end = m.start()
-                if best_end > 0:
-                    caption = caption[: best_end + 1]
-                else:
-                    caption = caption[:_MAX_CAPTION_LEN]
-            return caption
+    # Try to match by figure number mentioned in caption text
+    for cap in page_captions:
+        if cap in used_captions:
+            continue
+        # Check if this caption mentions the right figure number
+        match = re.search(r"(?:fig(?:ure)?|table)\s*\.?\s*(\d+)", cap, re.IGNORECASE)
+        if match and int(match.group(1)) == image_number:
+            used_captions.add(cap)
+            return cap
+
+    # Fallback: first unused caption on the same page
+    for cap in page_captions:
+        if cap not in used_captions:
+            used_captions.add(cap)
+            return cap
 
     return ""
 
 
 def _extract_images_from_pdf(
-    pdf_path: str, output_dir: str
+    conv_result, output_dir: str
 ) -> list[dict]:
     """
-    Extract all significant images from a PDF and save them as PNG files.
+    Extract all significant figures from a Docling conversion result.
 
-    Uses a two-pass approach for caption matching:
-    1. Scan the entire document for all captions (keyed by figure number)
-    2. Match each extracted image to its caption by ordinal position
-    3. Fall back to spatial proximity search if ordinal matching fails
+    Docling's layout model identifies figures and structurally associates
+    them with their captions. For multi-part figures where Docling only
+    attaches the caption to the last sub-image, a fallback scans the
+    document for caption-labeled text items matching the figure number.
+
+    Args:
+        conv_result: A Docling ConversionResult (with generate_picture_images=True).
+        output_dir: Directory where extracted images will be saved as PNGs.
 
     Returns a list of dicts with:
         - filename: the saved image file name
         - caption: detected caption text (may be empty)
         - page: page number where the image was found
+        - width, height: image dimensions
         - figure_number: ordinal position of the image
     """
-    doc = fitz.open(pdf_path)
+    doc = conv_result.document
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
 
-    # First pass: extract all captions from the document
-    all_captions = _extract_all_captions(doc)
+    # First pass: collect all caption texts by page for fallback matching
+    caption_map = _build_caption_map(doc)
+    used_captions: set[str] = set()
 
     results = []
     image_counter = 0
 
-    for page_num, page in enumerate(doc):
-        image_list = page.get_images(full=True)
+    for element, _level in doc.iterate_items():
+        if not isinstance(element, PictureItem):
+            continue
 
-        for img_info in image_list:
-            xref = img_info[0]
+        image = element.get_image(doc)
+        if image is None:
+            continue
 
-            # Extract the image
-            try:
-                base_image = doc.extract_image(xref)
-            except Exception:
-                continue
+        # Skip tiny images (logos, icons, decorative elements)
+        if image.width < MIN_WIDTH or image.height < MIN_HEIGHT:
+            continue
 
-            if not base_image:
-                continue
+        image_counter += 1
+        filename = f"figure_{image_counter:02d}.png"
+        filepath = output_path / filename
 
-            width = base_image["width"]
-            height = base_image["height"]
+        # Save image to disk
+        image.save(filepath, "PNG")
 
-            # Skip tiny images (logos, icons, decorative elements)
-            if width < MIN_WIDTH or height < MIN_HEIGHT:
-                continue
+        # Get caption via Docling's structural caption references
+        caption = element.caption_text(doc=doc) or ""
 
-            image_counter += 1
-            ext = base_image["ext"]
-            filename = f"figure_{image_counter:02d}.{ext}"
-            filepath = output_path / filename
+        # Get page number from provenance
+        page = element.prov[0].page_no if element.prov else 0
 
-            # Save image to disk
-            with open(filepath, "wb") as f:
-                f.write(base_image["image"])
-
-            # Try ordinal matching first, then fall back to spatial search
-            caption = all_captions.get(image_counter, "")
-            if not caption:
-                try:
-                    img_rects = page.get_image_rects(xref)
-                    if img_rects:
-                        caption = _find_caption(page, img_rects[0])
-                except Exception:
-                    pass
-
-            results.append(
-                {
-                    "filename": filename,
-                    "caption": caption,
-                    "page": page_num + 1,
-                    "width": width,
-                    "height": height,
-                    "figure_number": image_counter,
-                }
+        if caption:
+            used_captions.add(caption)
+        else:
+            # Fallback: find a caption by figure number or page proximity
+            caption = _find_caption_for_image(
+                page, image_counter, caption_map, used_captions
             )
 
-    doc.close()
+        results.append(
+            {
+                "filename": filename,
+                "caption": caption,
+                "page": page,
+                "width": image.width,
+                "height": image.height,
+                "figure_number": image_counter,
+            }
+        )
+
     return results
+
+
+def _convert_pdf_for_images(pdf_path: str):
+    """Standalone Docling conversion for the @tool entry point."""
+    pipeline_options = PdfPipelineOptions()
+    pipeline_options.generate_picture_images = True
+    pipeline_options.images_scale = 2.0
+
+    return DocumentConverter(
+        format_options={
+            InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options)
+        }
+    ).convert(pdf_path)
 
 
 @tool
@@ -232,5 +188,6 @@ def extract_images(pdf_path: str, output_dir: str) -> str:
         JSON string with a list of extracted images, each having
         filename, caption, page number, and dimensions.
     """
-    images = _extract_images_from_pdf(pdf_path, output_dir)
+    conv_result = _convert_pdf_for_images(pdf_path)
+    images = _extract_images_from_pdf(conv_result, output_dir)
     return json.dumps(images, ensure_ascii=False)
