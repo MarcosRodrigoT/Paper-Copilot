@@ -292,8 +292,21 @@ st.markdown(
 # Total pipeline steps for progress tracking
 _TOTAL_STEPS = 6
 
+# --- Show a previously selected processed paper ---
+if selected_paper != "(none)":
+    # Dropdown selection takes priority (file_uploader retains its state
+    # across reruns, so we check the dropdown first).
+    paper_info = next(p for p in processed if p["name"] == selected_paper)
+    summary_path = paper_info["summary_path"]
+    paper_output_dir = paper_info["output_dir"]
+    images_dir = paper_output_dir / "images"
+
+    _render_summary(summary_path, images_dir)
+    st.divider()
+    _render_download_buttons(selected_paper, summary_path, images_dir)
+
 # --- Handle uploaded file ---
-if uploaded_file is not None:
+elif uploaded_file is not None:
     input_path = INPUT_DIR / uploaded_file.name
     input_path.write_bytes(uploaded_file.getvalue())
 
@@ -360,17 +373,6 @@ if uploaded_file is not None:
         _render_summary(summary_path, images_dir)
         st.divider()
         _render_download_buttons(paper_name, summary_path, images_dir)
-
-# --- Show a previously selected processed paper ---
-elif selected_paper != "(none)":
-    paper_info = next(p for p in processed if p["name"] == selected_paper)
-    summary_path = paper_info["summary_path"]
-    paper_output_dir = paper_info["output_dir"]
-    images_dir = paper_output_dir / "images"
-
-    _render_summary(summary_path, images_dir)
-    st.divider()
-    _render_download_buttons(selected_paper, summary_path, images_dir)
 
 else:
     st.markdown(
