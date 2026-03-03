@@ -98,6 +98,20 @@ def _free_gpu_memory():
         pass
 
 
+def _unload_ollama_model(model_name: str):
+    """Tell Ollama to unload the model from GPU memory."""
+    import requests
+
+    try:
+        requests.post(
+            f"{OLLAMA_BASE_URL}/api/generate",
+            json={"model": model_name, "keep_alive": 0},
+            timeout=10,
+        )
+    except Exception:
+        pass  # Best-effort; don't fail the pipeline over this.
+
+
 def _create_llm(model_name: str | None = None) -> ChatOllama:
     """Create a ChatOllama instance."""
     return ChatOllama(
@@ -418,6 +432,9 @@ def process_paper(
         chart_source_path=chart_path if chart_generated else "",
         figure_filenames=figure_filenames,
     )
+
+    # Unload the Ollama model from GPU memory.
+    _unload_ollama_model(model_name or OLLAMA_MODEL)
 
     _progress("Done!", f"Summary saved to: {summary_path}")
     return summary_path
