@@ -93,6 +93,96 @@ def _extract_venue(ref_text: str) -> str:
     return "Unknown"
 
 
+def _normalize_venue(venue: str) -> str:
+    """Normalize venue names: strip years, unify common variations."""
+    # Remove trailing year: "NeurIPS 2020" -> "NeurIPS"
+    venue = re.sub(r"\s+\d{4}\s*$", "", venue).strip()
+
+    # Full name -> abbreviation mappings
+    _FULL_TO_SHORT = {
+        "Advances in Neural Information Processing Systems": "NeurIPS",
+        "Neural Information Processing Systems": "NeurIPS",
+        "International Conference on Machine Learning": "ICML",
+        "Computer Vision and Pattern Recognition": "CVPR",
+        "International Conference on Computer Vision": "ICCV",
+        "European Conference on Computer Vision": "ECCV",
+        "International Conference on Learning Representations": "ICLR",
+        "Association for Computational Linguistics": "ACL",
+        "Empirical Methods in Natural Language Processing": "EMNLP",
+        "North American Chapter of the Association for Computational Linguistics": "NAACL",
+        "Association for the Advancement of Artificial Intelligence": "AAAI",
+        "International Joint Conference on Artificial Intelligence": "IJCAI",
+        "Knowledge Discovery and Data Mining": "KDD",
+        "Journal of Machine Learning Research": "JMLR",
+        "IEEE Transactions on Pattern Analysis and Machine Intelligence": "TPAMI",
+        "Computational Linguistics": "CL",
+    }
+
+    # Check if venue contains a known full name
+    venue_lower = venue.lower()
+    for full_name, short in _FULL_TO_SHORT.items():
+        if full_name.lower() in venue_lower:
+            return short
+
+    # Direct abbreviation normalizations
+    normalizations = {
+        "NIPS": "NeurIPS",
+        "Proc": "Other",
+    }
+    if venue in normalizations:
+        return normalizations[venue]
+
+    # Check if venue contains a known abbreviation
+    for abbrev in ["NeurIPS", "NIPS", "ICML", "CVPR", "ICCV", "ECCV", "ICLR",
+                    "ACL", "EMNLP", "NAACL", "AAAI", "IJCAI", "KDD", "SIGIR",
+                    "WWW", "AISTATS", "ICRA", "IROS", "CoRL", "RSS",
+                    "INTERSPEECH", "EACL", "COLING", "TACL", "JMLR", "TPAMI"]:
+        if abbrev in venue:
+            return normalizations.get(abbrev, abbrev)
+
+    return venue
+
+
+def _classify_unknown_venues(
+    parsed_refs: list[dict], llm_call_fn
+) -> list[dict]:
+    """
+    Use an LLM to classify venues for references where regex returned 'Unknown'.
+
+    Args:
+        parsed_refs: List of parsed reference dicts (with 'venue' and 'raw_text').
+        llm_call_fn: Callable(prompt, label) -> str. Used to call the LLM.
+
+    Returns:
+        The same list with 'venue' fields updated where the LLM identified a venue.
+    """
+    from src.prompts import VENUE_CLASSIFICATION_PROMPT
+
+    unknowns = [(i, r) for i, r in enumerate(parsed_refs) if r.get("venue") == "Unknown"]
+    if not unknowns:
+        return parsed_refs
+
+    BATCH_SIZE = 20
+    for batch_start in range(0, len(unknowns), BATCH_SIZE):
+        batch = unknowns[batch_start : batch_start + BATCH_SIZE]
+        refs_text = "\n".join(
+            f"{j + 1}: {r['raw_text']}" for j, (_, r) in enumerate(batch)
+        )
+        prompt = VENUE_CLASSIFICATION_PROMPT.format(references=refs_text)
+        response = llm_call_fn(prompt, "venue classification")
+
+        for line in response.split("\n"):
+            m = re.match(r"^(\d+)\s*[:\.]\s*(.+)$", line.strip())
+            if m:
+                idx_in_batch = int(m.group(1)) - 1  # 1-indexed to 0-indexed
+                venue = m.group(2).strip().rstrip(",.")
+                if 0 <= idx_in_batch < len(batch) and venue.lower() != "unknown":
+                    original_idx = batch[idx_in_batch][0]
+                    parsed_refs[original_idx]["venue"] = venue
+
+    return parsed_refs
+
+
 def _parse_reference_list(references_text: str) -> list[dict]:
     """
     Parse a references section into structured entries.

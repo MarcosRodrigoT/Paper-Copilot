@@ -39,7 +39,11 @@ from src.prompts import (
 from src.tools.extract_images import _extract_images_from_pdf
 from src.tools.extract_text import _extract_sections
 from src.tools.generate_chart import _generate_pie_chart
-from src.tools.parse_references import _parse_reference_list
+from src.tools.parse_references import (
+    _classify_unknown_venues,
+    _normalize_venue,
+    _parse_reference_list,
+)
 from src.tools.save_markdown import _build_markdown, _save_output
 
 
@@ -189,6 +193,20 @@ def process_paper(pdf_path: str, model_name: str | None = None) -> str:
     refs_text = _find_references_section(sections)
     parsed_refs = _parse_reference_list(refs_text) if refs_text else []
     print(f"      Parsed {len(parsed_refs)} references")
+
+    # Classify unknown venues using LLM
+    unknown_count = sum(1 for r in parsed_refs if r.get("venue") == "Unknown")
+    if unknown_count > 0:
+        print(f"      {unknown_count} references with unknown venue, asking LLM...")
+        parsed_refs = _classify_unknown_venues(
+            parsed_refs, lambda p, l: _llm_call(llm, p, l)
+        )
+        remaining = sum(1 for r in parsed_refs if r.get("venue") == "Unknown")
+        print(f"      After LLM: {remaining} still unknown")
+
+    # Normalize all venue names for consistent chart labels
+    for ref in parsed_refs:
+        ref["venue"] = _normalize_venue(ref.get("venue", "Unknown"))
 
     chart_generated = False
     if parsed_refs:

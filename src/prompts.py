@@ -120,6 +120,30 @@ Paper summary:
 {summary}
 """
 
+VENUE_CLASSIFICATION_PROMPT = """\
+Below is a list of academic references where the venue, journal, or conference \
+could not be determined automatically. For each numbered reference, identify \
+the publication venue.
+
+Rules:
+- Use short standard names: "NeurIPS", "ICML", "CVPR", "ICLR", "ACL", \
+"EMNLP", "AAAI", "IJCAI", "Nature", "Science", "JMLR", "TPAMI", "TACL", etc.
+- For arXiv preprints, write "arXiv"
+- For workshop papers, use the parent conference name (e.g., "NeurIPS Workshop")
+- For book chapters, write "Book"
+- For theses, write "Thesis"
+- If you truly cannot determine the venue, write "Unknown"
+- Output EXACTLY one line per reference in the format shown below, nothing else
+
+Example output:
+1: NeurIPS
+2: arXiv
+3: JMLR
+
+References:
+{references}
+"""
+
 # Mapping from section names to the paper headings likely to contain
 # the relevant information. Used to select which extracted sections
 # to feed into each prompt.

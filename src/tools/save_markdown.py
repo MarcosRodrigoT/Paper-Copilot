@@ -68,7 +68,9 @@ def _build_markdown(
             if any(kw in fig_section for kw in section_keywords):
                 lines.append("")
                 caption = fig.get("caption", "")
-                lines.append(f"![{caption}](images/{fig['filename']})")
+                # Use short alt-text, show full caption below
+                alt_text = caption[:80] + "..." if len(caption) > 80 else caption
+                lines.append(f"![{alt_text}](images/{fig['filename']})")
                 if caption:
                     lines.append(f"*{caption}*")
                 lines.append("")
