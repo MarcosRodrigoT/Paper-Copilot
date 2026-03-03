@@ -114,15 +114,51 @@ def _normalize_venue(venue: str) -> str:
         "International Joint Conference on Artificial Intelligence": "IJCAI",
         "Knowledge Discovery and Data Mining": "KDD",
         "Journal of Machine Learning Research": "JMLR",
-        "IEEE Transactions on Pattern Analysis and Machine Intelligence": "TPAMI",
         "Computational Linguistics": "CL",
+        # IEEE-specific full names
+        "IEEE Transactions on Pattern Analysis and Machine Intelligence": "IEEE TPAMI",
+        "IEEE Transactions on Image Processing": "IEEE TIP",
+        "IEEE Transactions on Circuits and Systems for Video Technology": "IEEE TCSVT",
+        "IEEE Transactions on Neural Networks and Learning Systems": "IEEE TNNLS",
+        "IEEE Transactions on Multimedia": "IEEE TMM",
+        "IEEE Transactions on Signal Processing": "IEEE TSP",
+        "IEEE Transactions on Information Forensics and Security": "IEEE TIFS",
+        "IEEE Signal Processing Letters": "IEEE SPL",
+        "International Conference on Acoustics, Speech and Signal Processing": "ICASSP",
+        "International Conference on Multimedia and Expo": "ICME",
+        "ACM International Conference on Multimedia": "ACM MM",
+        "ACM Multimedia": "ACM MM",
+        "Winter Conference on Applications of Computer Vision": "WACV",
+        "British Machine Vision Conference": "BMVC",
     }
 
-    # Check if venue contains a known full name
+    # Check if venue contains a known full name (longest match first)
     venue_lower = venue.lower()
-    for full_name, short in _FULL_TO_SHORT.items():
+    for full_name, short in sorted(
+        _FULL_TO_SHORT.items(), key=lambda x: len(x[0]), reverse=True
+    ):
         if full_name.lower() in venue_lower:
             return short
+
+    # IEEE Trans. abbreviation patterns (e.g. "IEEE Trans. Circuits Syst. Video Technol.")
+    _IEEE_TRANS_PATTERNS = {
+        r"circuits\s+.*syst.*video": "IEEE TCSVT",
+        r"pattern\s+anal.*mach.*intell": "IEEE TPAMI",
+        r"image\s+process": "IEEE TIP",
+        r"neural\s+net.*learn": "IEEE TNNLS",
+        r"multimedia": "IEEE TMM",
+        r"signal\s+process(?!.*lett)": "IEEE TSP",
+        r"signal\s+process.*lett": "IEEE SPL",
+        r"info.*forensic": "IEEE TIFS",
+        r"comput.*vision": "IEEE TCSVT",
+        r"knowledge.*data\s+eng": "IEEE TKDE",
+        r"cybernetics": "IEEE TSMC",
+        r"affective": "IEEE TAFFC",
+    }
+    if "ieee" in venue_lower and ("trans" in venue_lower or "t." in venue_lower):
+        for pattern, short_name in _IEEE_TRANS_PATTERNS.items():
+            if re.search(pattern, venue_lower):
+                return short_name
 
     # Direct abbreviation normalizations
     normalizations = {
@@ -133,21 +169,50 @@ def _normalize_venue(venue: str) -> str:
         return normalizations[venue]
 
     # Check if venue contains a known abbreviation
-    for abbrev in ["NeurIPS", "NIPS", "ICML", "CVPR", "ICCV", "ECCV", "ICLR",
-                    "ACL", "EMNLP", "NAACL", "AAAI", "IJCAI", "KDD", "SIGIR",
-                    "WWW", "AISTATS", "ICRA", "IROS", "CoRL", "RSS",
-                    "INTERSPEECH", "EACL", "COLING", "TACL", "JMLR", "TPAMI"]:
+    known_abbrevs = [
+        "NeurIPS", "NIPS", "ICML", "CVPR", "ICCV", "ECCV", "ICLR",
+        "ACL", "EMNLP", "NAACL", "AAAI", "IJCAI", "KDD", "SIGIR",
+        "WWW", "AISTATS", "ICRA", "IROS", "CoRL", "RSS",
+        "INTERSPEECH", "EACL", "COLING", "TACL", "JMLR",
+        "ICASSP", "ICME", "WACV", "BMVC",
+    ]
+    for abbrev in known_abbrevs:
         if abbrev in venue:
             return normalizations.get(abbrev, abbrev)
 
+    # IEEE-specific abbreviations in venue text
+    ieee_abbrevs = {
+        "TPAMI": "IEEE TPAMI", "TIP": "IEEE TIP", "TCSVT": "IEEE TCSVT",
+        "TNNLS": "IEEE TNNLS", "TMM": "IEEE TMM", "TSP": "IEEE TSP",
+        "TKDE": "IEEE TKDE", "TAFFC": "IEEE TAFFC",
+    }
+    for abbrev, full in ieee_abbrevs.items():
+        if abbrev in venue:
+            return full
+
     return venue
+
+
+# Venue labels that are too vague and should be sent to the LLM for refinement
+_VAGUE_VENUES = {
+    "ieee", "ieee trans", "ieee transactions", "ieee conf", "ieee conference",
+    "ieee proc", "ieee proceedings", "acm", "acm conf", "acm proceedings",
+    "springer", "elsevier", "proceedings", "conference", "journal", "workshop",
+    "symposium", "transactions",
+}
+
+
+def _is_vague_venue(venue: str) -> bool:
+    """Check if a venue label is too generic to be useful."""
+    return venue.lower().strip().rstrip(".") in _VAGUE_VENUES
 
 
 def _classify_unknown_venues(
     parsed_refs: list[dict], llm_call_fn
 ) -> list[dict]:
     """
-    Use an LLM to classify venues for references where regex returned 'Unknown'.
+    Use an LLM to classify venues for references where regex failed or
+    returned a vague/generic label (e.g. bare "IEEE", "IEEE Trans").
 
     Args:
         parsed_refs: List of parsed reference dicts (with 'venue' and 'raw_text').
@@ -158,13 +223,16 @@ def _classify_unknown_venues(
     """
     from src.prompts import VENUE_CLASSIFICATION_PROMPT
 
-    unknowns = [(i, r) for i, r in enumerate(parsed_refs) if r.get("venue") == "Unknown"]
-    if not unknowns:
+    needs_llm = [
+        (i, r) for i, r in enumerate(parsed_refs)
+        if r.get("venue") == "Unknown" or _is_vague_venue(r.get("venue", ""))
+    ]
+    if not needs_llm:
         return parsed_refs
 
     BATCH_SIZE = 20
-    for batch_start in range(0, len(unknowns), BATCH_SIZE):
-        batch = unknowns[batch_start : batch_start + BATCH_SIZE]
+    for batch_start in range(0, len(needs_llm), BATCH_SIZE):
+        batch = needs_llm[batch_start : batch_start + BATCH_SIZE]
         refs_text = "\n".join(
             f"{j + 1}: {r['raw_text']}" for j, (_, r) in enumerate(batch)
         )

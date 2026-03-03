@@ -121,24 +121,47 @@ Paper summary:
 """
 
 VENUE_CLASSIFICATION_PROMPT = """\
-Below is a list of academic references where the venue, journal, or conference \
-could not be determined automatically. For each numbered reference, identify \
-the publication venue.
+Below is a list of academic references. For each numbered reference, identify \
+the specific publication venue (journal or conference).
+
+IMPORTANT — Be specific:
+- Do NOT write just "IEEE". IEEE is a publisher, not a venue. \
+Always give the specific IEEE journal or conference, e.g. "IEEE TCSVT", \
+"IEEE Access", "IEEE TPAMI", "IEEE TIP", "IEEE TNNLS", "IEEE TMM".
+- Do NOT write generic labels like "IEEE Trans" or "IEEE Conf". \
+Always specify which transactions or conference.
 
 Rules:
-- Use short standard names: "NeurIPS", "ICML", "CVPR", "ICLR", "ACL", \
-"EMNLP", "AAAI", "IJCAI", "Nature", "Science", "JMLR", "TPAMI", "TACL", etc.
+- Use standard short names when they exist (see examples below)
 - For arXiv preprints, write "arXiv"
-- For workshop papers, use the parent conference name (e.g., "NeurIPS Workshop")
+- For workshop papers, write the workshop or parent conference, e.g. "CVPR Workshop"
 - For book chapters, write "Book"
 - For theses, write "Thesis"
 - If you truly cannot determine the venue, write "Unknown"
-- Output EXACTLY one line per reference in the format shown below, nothing else
+- Output EXACTLY one line per reference: the number, a colon, then the venue
 
-Example output:
-1: NeurIPS
+Examples of correct venue names:
+- Journals: "IEEE TCSVT", "IEEE Access", "IEEE TPAMI", "IEEE TIP", "IEEE TMM", \
+"IEEE TNNLS", "IEEE Signal Processing Letters", "JMLR", "TPAMI", "TACL", \
+"Pattern Recognition", "Neural Networks", "Nature", "Science", \
+"Multimedia Tools and Applications", "Computer Vision and Image Understanding", \
+"Signal Processing: Image Communication", "ACM Computing Surveys"
+- Conferences: "NeurIPS", "ICML", "CVPR", "ICCV", "ECCV", "ICLR", "ACL", \
+"EMNLP", "AAAI", "IJCAI", "ICASSP", "ICME", "ACM MM", "WACV", "BMVC", \
+"INTERSPEECH", "SIGIR", "KDD", "WWW"
+
+Example input and output:
+1: R. Smith et al., "Deep video summarization," IEEE Trans. Circuits Syst. Video Technol., vol. 30, 2020.
+2: J. Doe, "Attention mechanisms," arXiv preprint arXiv:2103.12345, 2021.
+3: A. Lee et al., "Object detection revisited," in Proc. IEEE/CVF CVPR, 2022, pp. 1234-1241.
+4: B. Wang, "Feature extraction for video," IEEE Access, vol. 9, pp. 5678-5690, 2021.
+5: K. Chen et al., "Neural video coding," in Proc. ACM Int. Conf. Multimedia, 2020.
+
+1: IEEE TCSVT
 2: arXiv
-3: JMLR
+3: CVPR
+4: IEEE Access
+5: ACM MM
 
 References:
 {references}
