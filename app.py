@@ -274,6 +274,10 @@ with st.sidebar:
 st.markdown(
     """
     <style>
+    /* Hide Streamlit toolbar/header */
+    header[data-testid="stHeader"] {
+        display: none !important;
+    }
     /* Center display-mode KaTeX blocks */
     .katex-display {
         text-align: center;
