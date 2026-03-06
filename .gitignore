@@ -9,6 +9,9 @@ wheels/
 # Virtual environments
 .venv
 
+# Demo recording frames (build artifact)
+demo_frames/
+
 # User data (PDFs and generated outputs)
 input/*
 !input/.gitkeep
