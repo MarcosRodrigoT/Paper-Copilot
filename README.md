@@ -2,6 +2,8 @@
 
 A local AI agent that reads a research paper (PDF) and produces a structured, Notion-ready markdown summary. Built with LangChain and Ollama — all processing happens on your machine, no data leaves it.
 
+![Demo](docs/demo.gif)
+
 ## What it does
 
 Drop a PDF, get a markdown summary containing:
